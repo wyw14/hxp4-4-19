@@ -111,6 +111,14 @@ export class AudioManager {
     }
   }
 
+  audioEnabled(): boolean {
+    return this.isEnabled;
+  }
+
+  audioInitialized(): boolean {
+    return this.isInitialized;
+  }
+
   destroy(): void {
     if (this.whiteNoiseSource) {
       try { this.whiteNoiseSource.stop(); } catch {}

@@ -10,6 +10,14 @@ import {
 } from './signal';
 import type { Signal, SignalsData, TunerState, WeatherOffset } from './types';
 
+interface SaveData {
+  version: number;
+  foundSignals: string[];
+  tuner: TunerState;
+  audioEnabled: boolean;
+  theme: string;
+}
+
 class Game {
   private renderer: CRTRenderer | null = null;
   private audioManager: AudioManager;
@@ -32,6 +40,14 @@ class Game {
   private binaryStream: string = '';
   private binaryTimer: number = 0;
 
+  private static readonly STORAGE_KEY = 'channel_zero_save';
+  private static readonly SAVE_VERSION = 1;
+  private static readonly THEMES: readonly string[] = ['amber', 'green', 'cyan'];
+  private static readonly DEFAULT_TUNER: TunerState = { vhf: 100, uhf: 400, antenna: 180 };
+
+  private theme: string = 'amber';
+  private saveTimer: number | null = null;
+
   private elements: {
     signalFill: HTMLElement;
     signalOverlay: HTMLElement;
@@ -40,6 +56,9 @@ class Game {
     binaryStream: HTMLElement;
     foundCount: HTMLElement;
     audioToggle: HTMLButtonElement;
+    themeButton: HTMLButtonElement;
+    themeLabel: HTMLElement;
+    clearButton: HTMLButtonElement;
   };
 
   constructor() {
@@ -61,7 +80,10 @@ class Game {
       signalDescription: get('signalOverlay').querySelector('.signal-description') as HTMLElement,
       binaryStream: get('signalOverlay').querySelector('.binary-stream') as HTMLElement,
       foundCount: get('foundCount'),
-      audioToggle: get('audioToggle') as HTMLButtonElement
+      audioToggle: get('audioToggle') as HTMLButtonElement,
+      themeButton: get('themeButton') as HTMLButtonElement,
+      themeLabel: get('themeButton').querySelector('.theme-label') as HTMLElement,
+      clearButton: get('clearButton') as HTMLButtonElement
     };
   }
 
@@ -108,22 +130,40 @@ class Game {
       }
     ], (param: KnobParam, value: number) => {
       this.tuner[param] = value;
+      this.scheduleSave();
     });
 
     this.elements.audioToggle.addEventListener('click', async () => {
-      if (!this.audioManager['isInitialized']) {
+      if (!this.audioManager.audioInitialized()) {
         await this.audioManager.init();
+        this.audioManager.resume();
+        this.audioManager.setEnabled(true);
+      } else {
+        this.audioManager.resume();
+        this.audioManager.toggle();
       }
-      this.audioManager.resume();
-      const enabled = this.audioManager.toggle();
+      const enabled = this.audioManager.audioEnabled();
       this.elements.audioToggle.classList.toggle('active', enabled);
+      this.scheduleSave();
+    });
+
+    this.elements.themeButton.addEventListener('click', () => {
+      this.cycleTheme();
+    });
+
+    this.elements.clearButton.addEventListener('click', () => {
+      this.clearData();
+    });
+
+    window.addEventListener('beforeunload', () => {
+      this.flushSave();
     });
 
     window.addEventListener('resize', () => {
       this.renderer?.resize();
     });
 
-    void this.knobController;
+    this.restoreState();
 
     this.animate();
   }
@@ -132,6 +172,104 @@ class Game {
     const response = await fetch('/signals.json');
     if (!response.ok) throw new Error('Failed to load signals');
     return response.json();
+  }
+
+  private restoreState(): void {
+    const data = this.loadSave();
+    if (data) {
+      if (data.tuner) {
+        this.tuner = { ...Game.DEFAULT_TUNER, ...data.tuner };
+        this.knobController?.setValue('vhf', this.tuner.vhf);
+        this.knobController?.setValue('uhf', this.tuner.uhf);
+        this.knobController?.setValue('antenna', this.tuner.antenna);
+      }
+      if (Array.isArray(data.foundSignals)) {
+        const validIds = new Set(this.signals.map(s => s.id));
+        this.foundSignals = new Set(data.foundSignals.filter(id => validIds.has(id)));
+      }
+      if (data.audioEnabled) {
+        this.audioManager.setEnabled(true);
+        this.elements.audioToggle.classList.add('active');
+      }
+    }
+    this.applyTheme(data?.theme ?? 'amber');
+    this.elements.foundCount.textContent = `Signals found: ${this.foundSignals.size} / ${this.signals.length}`;
+  }
+
+  private loadSave(): SaveData | null {
+    try {
+      const raw = localStorage.getItem(Game.STORAGE_KEY);
+      if (!raw) return null;
+      const data = JSON.parse(raw) as SaveData;
+      if (!data || data.version !== Game.SAVE_VERSION) return null;
+      return data;
+    } catch {
+      return null;
+    }
+  }
+
+  private scheduleSave(): void {
+    if (this.saveTimer !== null) return;
+    this.saveTimer = window.setTimeout(() => {
+      this.saveTimer = null;
+      this.flushSave();
+    }, 250);
+  }
+
+  private flushSave(): void {
+    if (this.saveTimer !== null) {
+      clearTimeout(this.saveTimer);
+      this.saveTimer = null;
+    }
+    try {
+      const data: SaveData = {
+        version: Game.SAVE_VERSION,
+        foundSignals: Array.from(this.foundSignals),
+        tuner: { ...this.tuner },
+        audioEnabled: this.audioManager.audioEnabled(),
+        theme: this.theme
+      };
+      localStorage.setItem(Game.STORAGE_KEY, JSON.stringify(data));
+    } catch {
+      /* storage unavailable */
+    }
+  }
+
+  private applyTheme(theme: string): void {
+    const next = Game.THEMES.includes(theme) ? theme : 'amber';
+    this.theme = next;
+    document.documentElement.setAttribute('data-theme', next);
+    this.elements.themeLabel.textContent = next.toUpperCase();
+  }
+
+  private cycleTheme(): void {
+    const idx = Game.THEMES.indexOf(this.theme);
+    const next = Game.THEMES[(idx + 1) % Game.THEMES.length];
+    this.applyTheme(next);
+    this.scheduleSave();
+  }
+
+  private clearData(): void {
+    try {
+      localStorage.removeItem(Game.STORAGE_KEY);
+    } catch {
+      /* ignore */
+    }
+    if (this.saveTimer !== null) {
+      clearTimeout(this.saveTimer);
+      this.saveTimer = null;
+    }
+    this.foundSignals.clear();
+    this.elements.foundCount.textContent = `Signals found: 0 / ${this.signals.length}`;
+    this.tuner = { ...Game.DEFAULT_TUNER };
+    this.knobController?.setValue('vhf', this.tuner.vhf);
+    this.knobController?.setValue('uhf', this.tuner.uhf);
+    this.knobController?.setValue('antenna', this.tuner.antenna);
+    this.audioManager.setEnabled(false);
+    this.elements.audioToggle.classList.remove('active');
+    this.applyTheme('amber');
+    this.signalOverlayActive = false;
+    this.elements.signalOverlay.classList.remove('active');
   }
 
   private updateSignalMatch(): void {
@@ -177,6 +315,7 @@ class Game {
         if (!this.foundSignals.has(signal.id)) {
           this.foundSignals.add(signal.id);
           this.elements.foundCount.textContent = `Signals found: ${this.foundSignals.size} / ${this.signals.length}`;
+          this.scheduleSave();
         }
       }
     }

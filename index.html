@@ -5,6 +5,19 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>CHANNEL ZERO - CRT Tuner</title>
   <link rel="stylesheet" href="/src/style.css" />
+  <script>
+    (function () {
+      try {
+        var raw = localStorage.getItem('channel_zero_save');
+        if (raw) {
+          var d = JSON.parse(raw);
+          if (d && (d.theme === 'amber' || d.theme === 'green' || d.theme === 'cyan')) {
+            document.documentElement.setAttribute('data-theme', d.theme);
+          }
+        }
+      } catch (e) {}
+    })();
+  </script>
 </head>
 <body>
   <div id="app">
@@ -66,6 +79,17 @@
           </button>
         </div>
         
+        <div class="utility-bar">
+          <button class="util-button" id="themeButton">
+            <span class="util-icon">◐</span>
+            <span class="theme-label">AMBER</span>
+          </button>
+          <button class="util-button danger" id="clearButton">
+            <span class="util-icon">✕</span>
+            <span class="util-label">CLEAR</span>
+          </button>
+        </div>
+
         <div class="instructions">
           <div>Drag knobs to tune • Scroll to fine-tune</div>
           <div id="foundCount">Signals found: 0 / 4</div>
